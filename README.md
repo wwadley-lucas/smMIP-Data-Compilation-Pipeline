@@ -1,5 +1,5 @@
 # smMIP Data Compilation Pipeline
-
+This is a follow up to the smMIP-Pipeline outputs. Found at - https://github.com/wwadley-lucas/smMIP-Pipeline
 A Python pipeline for consolidating and analyzing smMIP (single-molecule Molecular Inversion Probe) sequencing data for CHIP (Clonal Hematopoiesis of Indeterminate Potential) detection.
 
 ## Overview
