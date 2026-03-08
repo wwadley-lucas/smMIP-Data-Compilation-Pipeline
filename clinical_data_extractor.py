@@ -151,8 +151,8 @@ def extract_clinical_from_order_sheet(
 
         return result_df
 
-    except Exception as e:
-        logger.error(f"Error reading order sheet {order_sheet_path}: {e}")
+    except (FileNotFoundError, pd.errors.EmptyDataError, KeyError) as e:
+        logger.error(f"Error reading order sheet {order_sheet_path}: {type(e).__name__}: {e}")
         return pd.DataFrame()
 
 
@@ -218,8 +218,8 @@ def extract_clinical_from_metadata_txt(metadata_path: str) -> pd.DataFrame:
         logger.info(f"Extracted {len(result_df)} records from MetaData.txt")
         return result_df
 
-    except Exception as e:
-        logger.error(f"Error reading MetaData.txt {metadata_path}: {e}")
+    except (FileNotFoundError, pd.errors.EmptyDataError, KeyError) as e:
+        logger.error(f"Error reading MetaData.txt {metadata_path}: {type(e).__name__}: {e}")
         return pd.DataFrame()
 
 

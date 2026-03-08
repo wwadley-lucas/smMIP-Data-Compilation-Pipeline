@@ -102,8 +102,8 @@ def read_mutations_file(
         logger.info(f"Read {len(df)} mutations from {batch_id}")
         return df
 
-    except Exception as e:
-        logger.error(f"Error reading {file_path}: {e}")
+    except (FileNotFoundError, pd.errors.EmptyDataError, KeyError) as e:
+        logger.error(f"Error reading {file_path}: {type(e).__name__}: {e}")
         return pd.DataFrame()
 
 
@@ -240,12 +240,24 @@ def filter_mutations(
 
     Args:
         mutations_df: DataFrame with mutations
-        min_vaf: Minimum VAF threshold (default 0.001 = 0.1% for emerging CHIP detection)
+        min_vaf: Minimum VAF threshold (default 0.001 = 0.1%).
+            NOTE: This is intentionally below the clinical CHIP definition
+            threshold of 2% (VAF >= 0.02). The 0.1% cutoff is used for
+            exploratory/discovery purposes to capture subclonal variants and
+            emerging clones that may be below clinical detection limits.
+            For clinical-grade CHIP calls, set min_vaf=0.02.
         max_pvalue: Maximum P-value (default 0.05)
         exclude_flagged: Exclude mutations with non-empty flags
-        vaf_column: Column to use for VAF filtering
-                    'allele.frequency' - matches R analysis (default)
-                    'SSCS.allele.frequency' - more conservative
+        vaf_column: Column to use for VAF filtering.
+            'allele.frequency' — raw (uncorrected) allele frequency from
+            total read counts. This is the default to match the existing
+            R analysis pipeline (CHIP_analysis.R). Use this for consistency
+            with prior results.
+            'SSCS.allele.frequency' — single-strand consensus sequence
+            (SSCS)-corrected allele frequency, which is more conservative
+            and reduces PCR/sequencing artifacts. Switch to this column
+            when higher specificity is needed (e.g., validating low-VAF
+            calls or reporting clinical-grade variants).
 
     Returns:
         Filtered DataFrame
@@ -254,6 +266,13 @@ def filter_mutations(
         return mutations_df
 
     df = mutations_df.copy()
+
+    # Log and drop rows with NaN VAF values before filtering
+    if vaf_column in df.columns:
+        nan_count = df[vaf_column].isna().sum()
+        if nan_count > 0:
+            logger.warning(f"Dropping {nan_count} rows with NaN VAF values ({nan_count/len(df)*100:.1f}% of data)")
+        df = df[df[vaf_column].notna()]
 
     # Filter by VAF using specified column
     # Use > (not >=) to match R analysis behavior

@@ -138,17 +138,10 @@ def create_oncoplot(
         logger.error("Plotly not installed. Run: pip install plotly kaleido")
         return
 
-    # Filter mutations (use > to match R behavior)
+    # NOTE: Filtering is handled by the manager (master_output_manager.py line 318)
+    # via mutation_consolidator.filter_mutations() before data reaches this function.
+    # Do NOT duplicate filtering here — the manager's pre-filter is authoritative.
     df = mutations_df.copy()
-
-    if vaf_column in df.columns:
-        df = df[df[vaf_column] > min_vaf]
-    elif 'SSCS.allele.frequency' in df.columns:
-        df = df[df['SSCS.allele.frequency'] > min_vaf]
-    if 'P-value' in df.columns:
-        df = df[df['P-value'] <= max_pvalue]
-    if 'flags' in df.columns:
-        df = df[(df['flags'].isna()) | (df['flags'] == '') | (df['flags'].astype(str) == 'nan')]
 
     if df.empty:
         logger.warning("No mutations pass filters for oncoplot")
@@ -585,9 +578,10 @@ def compute_fisher_cooccurrence(
     os.makedirs(output_dir, exist_ok=True)
     results_df.to_csv(os.path.join(output_dir, 'fisher_cooccurrence.csv'), index=False)
 
-    # Filter significant pairs
-    significant = results_df[results_df['p_value'] < p_threshold].copy()
-    significant = significant.sort_values('p_value')
+    # Filter significant pairs using Bonferroni-corrected p-values
+    # (raw p_value is retained for reference but significance must use p_adjusted)
+    significant = results_df[results_df['p_adjusted'] < p_threshold].copy()
+    significant = significant.sort_values('p_adjusted')
     significant.to_csv(os.path.join(output_dir, 'significant_pairs.csv'), index=False)
 
     logger.info(f"Found {len(significant)} significant gene pairs (p < {p_threshold})")

@@ -1,0 +1,14 @@
+# Core data processing
+pandas>=1.5.0
+numpy>=1.24.0
+openpyxl>=3.1.0
+
+# Statistical analysis
+scipy>=1.10.0
+
+# Visualization
+plotly>=5.13.0
+kaleido>=0.2.1
+
+# Machine learning (PCA in visualization_generator.py)
+scikit-learn>=1.2.0

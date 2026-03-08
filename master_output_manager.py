@@ -35,11 +35,13 @@ from sample_index_builder import build_sample_index, update_sample_index
 from visualization_generator import generate_all_visualizations
 
 # Configuration — set SMMIP_ROOT env var or pass --root on CLI
-SMMIP_ROOT = os.environ.get('SMMIP_ROOT', '/Volumes/Seq_SSD/smMIP')
+# No hardcoded user-specific paths; defaults to current working directory if env var is unset
+SMMIP_ROOT = os.environ.get('SMMIP_ROOT', os.getcwd())
 MASTER_OUTPUT_DIR = os.path.join(SMMIP_ROOT, 'Master_Output')
 
 # External data overrides for specific batches
 # Maps batch_id to dict with 'mutations' and/or 'metadata' paths
+# Paths are relative to SMMIP_ROOT (resolved via --root CLI arg or SMMIP_ROOT env var)
 EXTERNAL_DATA_OVERRIDES = {
     '10_23_25': {
         'mutations': os.path.join(SMMIP_ROOT, 'FINAL_OUT', 'called_mutations.txt'),

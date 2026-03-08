@@ -30,6 +30,7 @@ venv/
 *.xlsx
 *.csv
 *.txt
+!requirements.txt
 
 # Logs
 *.log
