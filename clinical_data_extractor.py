@@ -424,26 +424,20 @@ def link_mutation_to_clinical(
 
 
 if __name__ == '__main__':
-    # Test with KG001 order sheet
+    # Example: extract clinical data from an order sheet.
+    # Usage: SMMIP_ROOT=/path/to/data python clinical_data_extractor.py
     import sys
 
     logging.basicConfig(level=logging.INFO)
 
     smmip_root = os.environ.get("SMMIP_ROOT", ".")
-    test_path = os.path.join(smmip_root, "KG001_01.22.25", "smMIP Order Sheet_KG001.xlsx")
+    example_path = os.path.join(smmip_root, "KG001_01.22.25", "smMIP Order Sheet_KG001.xlsx")
 
-    if os.path.exists(test_path):
-        print(f"Testing clinical extraction from: {test_path}")
-        df = extract_clinical_from_order_sheet(test_path)
-        print(f"\nExtracted {len(df)} rows:")
-        print(df.head(10))
-
-        # Test sample ID normalization
-        test_ids = ["D79A,D79B", "D98A", "D100", "D101B"]
-        print("\nSample ID normalization:")
-        for sid in test_ids:
-            print(f"  {sid} → {normalize_sample_id(sid)}")
-    else:
-        print(f"Test file not found: {test_path}")
+    if not os.path.exists(example_path):
+        print(f"Order sheet not found: {example_path}")
         print("Set SMMIP_ROOT to the smMIP data directory.")
         sys.exit(1)
+
+    df = extract_clinical_from_order_sheet(example_path)
+    print(f"Extracted {len(df)} rows from {example_path}")
+    print(df.head(10))

@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
 import logging
+import pandas as pd
 
 # Configure logging
 logging.basicConfig(
@@ -177,20 +178,30 @@ def discover_new_batches(all_batches: Dict[str, str]) -> Dict[str, str]:
     return new_batches
 
 
+def _get_update_logger() -> logging.Logger:
+    """Return a logger with RotatingFileHandler for the update log."""
+    update_logger = logging.getLogger('master_output_update_log')
+    if not update_logger.handlers:
+        from logging.handlers import RotatingFileHandler
+        log_path = os.path.join(MASTER_OUTPUT_DIR, 'logs', 'update_log.txt')
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        handler = RotatingFileHandler(
+            log_path, maxBytes=10 * 1024 * 1024, backupCount=3  # 10 MB, 3 backups
+        )
+        handler.setFormatter(logging.Formatter('[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+        update_logger.addHandler(handler)
+        update_logger.setLevel(logging.INFO)
+    return update_logger
+
+
 def log_update(message: str) -> None:
-    """Append message to update log."""
-    log_path = os.path.join(MASTER_OUTPUT_DIR, 'logs', 'update_log.txt')
-
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    log_line = f"[{timestamp}] {message}\n"
-
-    with open(log_path, 'a') as f:
-        f.write(log_line)
+    """Append message to update log with automatic rotation (10 MB, 3 backups)."""
+    _get_update_logger().info(message)
 
 
 def update_master_output(
     force_rebuild: bool = False,
-    specific_batches: List[str] = None
+    specific_batches: Optional[List[str]] = None
 ) -> Tuple[bool, str]:
     """
     Run full Master_Output update pipeline.
@@ -256,7 +267,6 @@ def update_master_output(
         if 'mutations' in override:
             external_mutations[batch_id] = override['mutations']
 
-    import pandas as pd
     mutations_df, newly_processed = consolidate_mutations(
         all_batches if force_rebuild else batches_to_process,
         mutations_path,

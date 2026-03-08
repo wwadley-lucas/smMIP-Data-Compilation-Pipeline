@@ -32,29 +32,21 @@ warnings.filterwarnings('ignore', category=DeprecationWarning)
 logger = logging.getLogger(__name__)
 
 # Variant type color scheme (from CHIP_analysis.R)
+# Keys are canonical display categories produced by normalize_variant_type().
+# Raw VEP annotations (e.g., missense_variant, stop_gained) are mapped to
+# these canonical categories before color lookup, so only one entry per
+# category is needed.
 VARIANT_COLORS = {
-    'missense_variant': '#3498db',      # Blue
-    'Missense': '#3498db',
-    'stop_gained': '#e74c3c',           # Red
-    'Nonsense': '#e74c3c',
-    'frameshift_variant': '#8e44ad',    # Dark Purple
-    'Deletion': '#8e44ad',
-    'inframe_insertion': '#9b59b6',     # Purple
-    'Insertion': '#9b59b6',
-    'inframe_deletion': '#a569bd',      # Light Purple
-    'Indel': '#a569bd',
-    'splice_region_variant': '#f39c12', # Orange
-    'splice_donor_variant': '#f39c12',
-    'splice_acceptor_variant': '#f39c12',
-    'Splice_Site': '#f39c12',
-    'synonymous_variant': '#95a5a6',    # Gray
-    'Synonymous': '#95a5a6',
-    'intron_variant': '#7f8c8d',        # Dark Gray
-    'Intronic': '#7f8c8d',
-    '5_prime_UTR_variant': '#bdc3c7',   # Light Gray
-    '3_prime_UTR_variant': '#bdc3c7',
-    'Non_Coding': '#bdc3c7',
-    'Other': '#2c3e50'                  # Very Dark Blue
+    'Missense': '#3498db',      # Blue  (missense_variant)
+    'Nonsense': '#e74c3c',      # Red   (stop_gained)
+    'Deletion': '#8e44ad',      # Dark Purple  (frameshift_variant)
+    'Insertion': '#9b59b6',     # Purple  (inframe_insertion)
+    'Indel': '#a569bd',         # Light Purple  (inframe_deletion)
+    'Splice_Site': '#f39c12',   # Orange  (splice_region/donor/acceptor_variant)
+    'Synonymous': '#95a5a6',    # Gray  (synonymous_variant)
+    'Intronic': '#7f8c8d',      # Dark Gray  (intron_variant)
+    'Non_Coding': '#bdc3c7',    # Light Gray  (5'/3'_prime_UTR_variant)
+    'Other': '#2c3e50',         # Very Dark Blue
 }
 
 # VAF color scale (red gradient)
@@ -74,7 +66,25 @@ GENE_RISK = {
 
 
 def normalize_variant_type(variant_type: str) -> str:
-    """Normalize variant type for consistent coloring."""
+    """
+    Normalize variant type strings into canonical categories for consistent coloring.
+
+    Maps the diverse variant type annotations found in called_mutations.txt
+    (e.g., 'missense_variant', 'stop_gained', 'frameshift_variant') to a small
+    set of display categories (e.g., 'Missense', 'Nonsense', 'Deletion') that
+    correspond to entries in VARIANT_COLORS.
+
+    Args:
+        variant_type: Raw variant type string from mutation data.  May be a
+            VEP-style annotation (e.g., 'missense_variant') or a shorthand
+            label (e.g., 'Missense').
+
+    Returns:
+        Canonical variant category string.  One of: 'Missense', 'Nonsense',
+        'Deletion', 'Insertion', 'Indel', 'Splice_Site', 'Synonymous',
+        'Intronic', 'Non_Coding', or 'Other'.  Returns 'Other' for NaN
+        or unrecognized values.
+    """
     if pd.isna(variant_type):
         return 'Other'
 
@@ -197,15 +207,23 @@ def create_oncoplot(
         matrix.append(gene_row)
         hover_text.append(hover_row)
 
+    # Oncoplot layout constants
+    TOP_BAR_HEIGHT = 0.12        # Fraction of figure height for top bar chart
+    MAIN_HEATMAP_HEIGHT = 0.88   # Fraction of figure height for main heatmap
+    HEATMAP_WIDTH = 0.85         # Fraction of figure width for heatmap
+    SIDE_BAR_WIDTH = 0.15        # Fraction of figure width for right bar chart
+    VERTICAL_GAP = 0.05          # Gap between top bar and heatmap
+    HORIZONTAL_GAP = 0.02        # Gap between heatmap and right bar
+
     # Create 2x2 subplot grid:
     # [top bar chart] [empty corner]
     # [main heatmap]  [right bar chart]
     fig = make_subplots(
         rows=2, cols=2,
-        row_heights=[0.12, 0.88],
-        column_widths=[0.85, 0.15],
-        vertical_spacing=0.05,
-        horizontal_spacing=0.02,
+        row_heights=[TOP_BAR_HEIGHT, MAIN_HEATMAP_HEIGHT],
+        column_widths=[HEATMAP_WIDTH, SIDE_BAR_WIDTH],
+        vertical_spacing=VERTICAL_GAP,
+        horizontal_spacing=HORIZONTAL_GAP,
         specs=[
             [{"type": "bar"}, {"type": "scatter"}],  # Top row
             [{"type": "heatmap"}, {"type": "bar"}]   # Bottom row
@@ -289,8 +307,14 @@ def create_oncoplot(
     # =========================================================================
     # Layout configuration
     # =========================================================================
-    fig_height = max(600, 35 * len(genes) + 250)
-    fig_width = max(1000, 18 * len(samples) + 250)
+    MIN_FIG_HEIGHT = 600
+    MIN_FIG_WIDTH = 1000
+    PX_PER_GENE = 35
+    PX_PER_SAMPLE = 18
+    FIG_PADDING = 250
+
+    fig_height = max(MIN_FIG_HEIGHT, PX_PER_GENE * len(genes) + FIG_PADDING)
+    fig_width = max(MIN_FIG_WIDTH, PX_PER_SAMPLE * len(samples) + FIG_PADDING)
 
     fig.update_layout(
         height=fig_height,
@@ -704,11 +728,19 @@ def create_pca_plot(
     output_dir: str
 ) -> None:
     """
-    Generate PCA plot with clinical and mutation features.
+    Generate PCA plot from the per-sample gene VAF matrix.
+
+    PCA is computed on a samples-by-genes matrix of maximum VAF values
+    (standardized with z-scores).  Clinical data is NOT used as PCA input
+    features; it is only used to color points by MPN subtype (PMF, ET, PV,
+    etc.) when available.  If no clinical data is provided, points are
+    colored by mutation count instead.
 
     Args:
-        mutations_df: DataFrame with consolidated mutations
-        clinical_df: DataFrame with clinical data
+        mutations_df: DataFrame with consolidated mutations (must contain
+            sample_ID, gene, and a VAF column)
+        clinical_df: DataFrame with clinical data (used only for MPN-type
+            coloring; may be empty)
         output_dir: Directory to save plots
     """
     try:
@@ -899,41 +931,29 @@ def generate_all_visualizations(
 
 
 if __name__ == '__main__':
-    import sys
-
+    # Example: generate all visualizations from synthetic data.
+    # Usage: SMMIP_ROOT=/path/to/data python visualization_generator.py
     logging.basicConfig(level=logging.INFO)
-
-    # Test with sample data
-    print("Testing visualization generator...")
-
-    # Create sample mutation data
-    test_mutations = pd.DataFrame({
-        'batch_id': ['KG001'] * 10,
-        'sample_ID': ['D1A,D1B', 'D2A', 'D3B', 'D4A,D4B', 'D5A',
-                      'D1A,D1B', 'D2A', 'D3B', 'D4A,D4B', 'D6A'],
-        'gene': ['DNMT3A', 'DNMT3A', 'TET2', 'TET2', 'JAK2',
-                 'TET2', 'ASXL1', 'ASXL1', 'SF3B1', 'TP53'],
-        'variant_type': ['missense_variant'] * 10,
-        'SSCS.allele.frequency': [0.05, 0.12, 0.08, 0.15, 0.45,
-                                   0.03, 0.07, 0.11, 0.22, 0.04],
-        'P-value': [0.01] * 10,
-        'flags': [''] * 10
-    })
-
-    test_clinical = pd.DataFrame({
-        'D#': ['D1', 'D2', 'D3', 'D4', 'D5', 'D6'],
-        'Age': [65, 72, 58, 81, 45, 67],
-        'Sex': ['M', 'F', 'M', 'F', 'M', 'F'],
-        'MPN': ['PMF', '', '', 'ET', 'PV', '']
-    })
 
     smmip_root = os.environ.get("SMMIP_ROOT", ".")
     output_dir = os.path.join(smmip_root, 'Master_Output', 'output')
 
-    try:
-        generate_all_visualizations(test_mutations, test_clinical, output_dir)
-        print("Test visualizations created successfully!")
-    except Exception as e:
-        print(f"Error during test: {e}")
-        import traceback
-        traceback.print_exc()
+    # Minimal synthetic dataset for demonstration
+    demo_mutations = pd.DataFrame({
+        'batch_id': ['KG001'] * 6,
+        'sample_ID': ['D1A,D1B', 'D2A', 'D3B', 'D4A,D4B', 'D5A', 'D6A'],
+        'gene': ['DNMT3A', 'DNMT3A', 'TET2', 'TET2', 'JAK2', 'TP53'],
+        'variant_type': ['missense_variant'] * 6,
+        'SSCS.allele.frequency': [0.05, 0.12, 0.08, 0.15, 0.45, 0.04],
+        'P-value': [0.01] * 6,
+        'flags': [''] * 6,
+    })
+    demo_clinical = pd.DataFrame({
+        'D#': ['D1', 'D2', 'D3', 'D4', 'D5', 'D6'],
+        'Age': [65, 72, 58, 81, 45, 67],
+        'Sex': ['M', 'F', 'M', 'F', 'M', 'F'],
+        'MPN': ['PMF', '', '', 'ET', 'PV', ''],
+    })
+
+    generate_all_visualizations(demo_mutations, demo_clinical, output_dir)
+    print(f"Visualizations saved to {output_dir}")

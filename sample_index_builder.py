@@ -7,7 +7,6 @@ Columns: Batch ID | Sample ID | UCI ID | Date
 """
 
 import os
-import re
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -291,39 +290,30 @@ def get_sample_summary(index_df: pd.DataFrame) -> Dict:
 
 
 if __name__ == '__main__':
+    # Example: build a sample index from batch directories.
+    # Usage: SMMIP_ROOT=/path/to/data python sample_index_builder.py
     import sys
 
     logging.basicConfig(level=logging.INFO)
 
-    # Test with sample data
-    test_mutations = pd.DataFrame({
-        'batch_id': ['KG001_01.22.25', 'KG001_01.22.25', '10_23_25'],
-        'sample_ID': ['D98A,D98B', 'D99A,D99B', 'D100A']
-    })
-
     smmip_root = os.environ.get("SMMIP_ROOT", ".")
-    test_batches = {
+    example_batches = {
         'KG001_01.22.25': os.path.join(smmip_root, 'KG001_01.22.25'),
         '10_23_25': os.path.join(smmip_root, '10_23_25'),
     }
 
-    # Check which batches exist
-    existing_batches = {k: v for k, v in test_batches.items() if os.path.isdir(v)}
+    existing = {k: v for k, v in example_batches.items() if os.path.isdir(v)}
+    if not existing:
+        print("No batch directories found. Set SMMIP_ROOT to the smMIP data directory.")
+        sys.exit(0)
 
-    if existing_batches:
-        print(f"Testing with batches: {list(existing_batches.keys())}")
+    # Minimal mutations DataFrame for demonstration
+    mutations = pd.DataFrame({
+        'batch_id': list(existing.keys()),
+        'sample_ID': ['D98A,D98B', 'D100A'][:len(existing)],
+    })
 
-        output = os.path.join(smmip_root, 'Master_Output', 'test_sample_index.xlsx')
-        df = build_sample_index(existing_batches, test_mutations, output)
-
-        print(f"\nSample index ({len(df)} rows):")
-        print(df)
-
-        print("\nSummary:")
-        print(get_sample_summary(df))
-
-        # Cleanup
-        if os.path.exists(output):
-            os.remove(output)
-    else:
-        print("No test batches found")
+    output = os.path.join(smmip_root, 'Master_Output', 'sample_index.xlsx')
+    df = build_sample_index(existing, mutations, output)
+    print(f"Built sample index: {len(df)} rows")
+    print(get_sample_summary(df))

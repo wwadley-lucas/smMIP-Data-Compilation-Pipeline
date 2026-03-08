@@ -302,39 +302,26 @@ def filter_mutations(
 
 
 if __name__ == '__main__':
+    # Example: consolidate mutations across discovered batches.
+    # Usage: SMMIP_ROOT=/path/to/data python mutation_consolidator.py
     import sys
 
     logging.basicConfig(level=logging.INFO)
 
-    # Test with sample batches
     smmip_root = os.environ.get("SMMIP_ROOT", ".")
-    test_batches = {
+    example_batches = {
         'KG001_01.22.25': os.path.join(smmip_root, 'KG001_01.22.25'),
         '10_23_25': os.path.join(smmip_root, '10_23_25'),
     }
 
-    # Check which batches exist
-    existing_batches = {k: v for k, v in test_batches.items() if os.path.isdir(v)}
-
-    if existing_batches:
-        print(f"Testing with batches: {list(existing_batches.keys())}")
-
-        output = os.path.join(smmip_root, 'Master_Output', 'test_mutations.txt')
-        df, processed = consolidate_mutations(existing_batches, output)
-
-        print(f"\nProcessed batches: {processed}")
-        print(f"Total mutations: {len(df)}")
-
-        if not df.empty:
-            print("\nUnique genes:")
-            print(df['gene'].value_counts().head(10))
-
-            print("\nSample summary:")
-            print(get_unique_samples(df).head())
-
-        # Cleanup test file
-        if os.path.exists(output):
-            os.remove(output)
-    else:
-        print("No test batches found")
+    existing = {k: v for k, v in example_batches.items() if os.path.isdir(v)}
+    if not existing:
+        print("No batch directories found. Set SMMIP_ROOT to the smMIP data directory.")
         sys.exit(1)
+
+    output = os.path.join(smmip_root, 'Master_Output', 'consolidated_mutations.txt')
+    df, processed = consolidate_mutations(existing, output)
+    print(f"Processed {len(processed)} batches, {len(df)} total mutations")
+
+    if not df.empty:
+        print(f"\nTop genes:\n{df['gene'].value_counts().head(10)}")
