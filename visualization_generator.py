@@ -112,47 +112,35 @@ def normalize_variant_type(variant_type: str) -> str:
         return 'Other'
 
 
-def create_oncoplot(
+def _prepare_oncoplot_data(
     mutations_df: pd.DataFrame,
-    output_dir: str,
-    filename_base: str = 'master_oncoplot',
-    min_vaf: float = 0.001,
-    max_pvalue: float = 0.05,
-    top_n_genes: int = 30,
-    vaf_column: str = 'allele.frequency'
-) -> None:
+    top_n_genes: int,
+    vaf_column: str
+) -> Optional[Tuple[pd.DataFrame, List[str], List[str], List[List[Optional[str]]],
+                     List[List[str]], pd.Series]]:
     """
-    Generate oncoplot showing mutation landscape.
+    Filter mutations and build the gene-sample matrix for an oncoplot.
 
-    Layout matches R ComplexHeatmap style:
-    - Top bar: Mutations per sample
-    - Main: Gene x Sample heatmap (sorted by mutation frequency, most at top)
-    - Right bar: Number of samples mutated per gene
+    Normalizes sample IDs, selects the top N genes by sample count, constructs
+    a variant-type matrix (genes x samples) picking the highest-severity variant
+    per cell, and builds matching hover text.
 
     Args:
-        mutations_df: DataFrame with consolidated mutations
-        output_dir: Directory to save plots
-        filename_base: Base filename for outputs
-        min_vaf: Minimum VAF filter
-        max_pvalue: Maximum P-value filter
-        top_n_genes: Number of top mutated genes to show
-        vaf_column: Column to use for VAF filtering
-    """
-    try:
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
-    except ImportError:
-        logger.error("Plotly not installed. Run: pip install plotly kaleido")
-        return
+        mutations_df: DataFrame with consolidated mutations (already pre-filtered
+            by the manager).
+        top_n_genes: Number of top mutated genes to include.
+        vaf_column: Column name used for VAF display in hover text.
 
-    # NOTE: Filtering is handled by the manager (master_output_manager.py line 318)
-    # via mutation_consolidator.filter_mutations() before data reaches this function.
-    # Do NOT duplicate filtering here — the manager's pre-filter is authoritative.
+    Returns:
+        A tuple of (df, genes, samples, matrix, hover_text, gene_sample_counts)
+        where *matrix* and *hover_text* are lists-of-lists aligned to
+        genes (rows) x samples (cols).  Returns ``None`` if the input is empty.
+    """
     df = mutations_df.copy()
 
     if df.empty:
         logger.warning("No mutations pass filters for oncoplot")
-        return
+        return None
 
     # Normalize sample IDs
     df['sample_normalized'] = df['sample_ID'].apply(normalize_sample_id)
@@ -207,49 +195,59 @@ def create_oncoplot(
         matrix.append(gene_row)
         hover_text.append(hover_row)
 
-    # Oncoplot layout constants
-    TOP_BAR_HEIGHT = 0.12        # Fraction of figure height for top bar chart
-    MAIN_HEATMAP_HEIGHT = 0.88   # Fraction of figure height for main heatmap
-    HEATMAP_WIDTH = 0.85         # Fraction of figure width for heatmap
-    SIDE_BAR_WIDTH = 0.15        # Fraction of figure width for right bar chart
-    VERTICAL_GAP = 0.05          # Gap between top bar and heatmap
-    HORIZONTAL_GAP = 0.02        # Gap between heatmap and right bar
+    return df, genes, samples, matrix, hover_text, gene_sample_counts
 
-    # Create 2x2 subplot grid:
-    # [top bar chart] [empty corner]
-    # [main heatmap]  [right bar chart]
-    fig = make_subplots(
-        rows=2, cols=2,
-        row_heights=[TOP_BAR_HEIGHT, MAIN_HEATMAP_HEIGHT],
-        column_widths=[HEATMAP_WIDTH, SIDE_BAR_WIDTH],
-        vertical_spacing=VERTICAL_GAP,
-        horizontal_spacing=HORIZONTAL_GAP,
-        specs=[
-            [{"type": "bar"}, {"type": "scatter"}],  # Top row
-            [{"type": "heatmap"}, {"type": "bar"}]   # Bottom row
-        ]
-    )
 
-    # =========================================================================
-    # Top bar chart - mutations per sample (row 1, col 1)
-    # =========================================================================
-    sample_counts = df.groupby('sample_normalized')['gene'].count()
-    sample_counts = sample_counts.reindex(samples).fillna(0)
+def _build_clinical_annotations(
+    clinical_df: Optional[pd.DataFrame],
+    samples: List[str]
+) -> Optional[Dict]:
+    """
+    Build clinical annotation arrays and color mappings for an oncoplot.
 
-    fig.add_trace(
-        go.Bar(
-            x=list(range(len(samples))),
-            y=sample_counts.values,
-            marker_color='#4472C4',
-            showlegend=False,
-            hovertemplate='%{y} mutations<extra></extra>'
-        ),
-        row=1, col=1
-    )
+    Currently the oncoplot does not include a clinical annotation bar, so this
+    function is a no-op placeholder.  It returns ``None``, which the orchestrator
+    interprets as "skip clinical annotations".  When clinical annotation support
+    is added, this function should return a dict with keys like
+    ``{'values': [...], 'colors': {...}}``.
 
-    # =========================================================================
-    # Main heatmap (row 2, col 1)
-    # =========================================================================
+    Args:
+        clinical_df: DataFrame with clinical data, or ``None``.
+        samples: Ordered list of sample IDs matching the heatmap columns.
+
+    Returns:
+        ``None`` (no annotations available).
+    """
+    # Placeholder — clinical annotation bar not yet implemented in oncoplot.
+    return None
+
+
+def _render_oncoplot_heatmap(
+    fig,
+    matrix: List[List[Optional[str]]],
+    hover_text: List[List[str]],
+    genes: List[str],
+    samples: List[str]
+) -> None:
+    """
+    Add the main gene-by-sample heatmap trace to the oncoplot figure.
+
+    Converts the variant-type matrix into a numeric z-array with a discrete
+    colorscale derived from :data:`VARIANT_COLORS`, then adds a
+    ``plotly.graph_objects.Heatmap`` trace at row 2, col 1.
+
+    Args:
+        fig: Plotly ``Figure`` (2x2 subplot grid) to add the trace to.
+        matrix: Gene x sample matrix of variant-type strings (or ``None``).
+        hover_text: Matching hover-text matrix.
+        genes: Ordered gene list (y-axis).
+        samples: Ordered sample list (x-axis).
+    """
+    import plotly.graph_objects as go
+
+    severity_order = ['Nonsense', 'Deletion', 'Insertion', 'Indel', 'Splice_Site',
+                      'Missense', 'Synonymous', 'Intronic', 'Non_Coding', 'Other']
+
     # Convert variants to numeric for coloring
     variant_to_num = {v: i+1 for i, v in enumerate(severity_order)}
 
@@ -287,9 +285,46 @@ def create_oncoplot(
         row=2, col=1
     )
 
-    # =========================================================================
+
+def _render_frequency_bars(
+    fig,
+    df: pd.DataFrame,
+    genes: List[str],
+    samples: List[str],
+    gene_sample_counts: pd.Series
+) -> None:
+    """
+    Add top and side frequency bar charts to the oncoplot figure.
+
+    - **Top bar** (row 1, col 1): total mutations per sample.
+    - **Side bar** (row 2, col 2): number of unique samples mutated per gene.
+
+    Args:
+        fig: Plotly ``Figure`` (2x2 subplot grid) to add traces to.
+        df: Filtered mutations DataFrame (must contain ``sample_normalized``
+            and ``gene`` columns).
+        genes: Ordered gene list matching the heatmap y-axis.
+        samples: Ordered sample list matching the heatmap x-axis.
+        gene_sample_counts: Series mapping gene -> unique sample count.
+    """
+    import plotly.graph_objects as go
+
+    # Top bar chart - mutations per sample (row 1, col 1)
+    sample_counts = df.groupby('sample_normalized')['gene'].count()
+    sample_counts = sample_counts.reindex(samples).fillna(0)
+
+    fig.add_trace(
+        go.Bar(
+            x=list(range(len(samples))),
+            y=sample_counts.values,
+            marker_color='#4472C4',
+            showlegend=False,
+            hovertemplate='%{y} mutations<extra></extra>'
+        ),
+        row=1, col=1
+    )
+
     # Right bar chart - samples per gene (row 2, col 2)
-    # =========================================================================
     gene_counts = [gene_sample_counts[gene] for gene in genes]
 
     fig.add_trace(
@@ -304,9 +339,29 @@ def create_oncoplot(
         row=2, col=2
     )
 
-    # =========================================================================
+
+def _assemble_oncoplot_figure(
+    fig,
+    genes: List[str],
+    samples: List[str],
+    output_dir: str,
+    filename_base: str
+) -> None:
+    """
+    Apply final layout, add legend and title, and save the oncoplot figure.
+
+    Configures axis labels, tick formatting, dynamic figure sizing, a variant-type
+    legend at the bottom, and a bold title.  Saves the figure as interactive HTML,
+    plus static PDF and PNG (if kaleido is installed).
+
+    Args:
+        fig: Fully populated Plotly ``Figure`` with all traces added.
+        genes: Ordered gene list (used for axis ticks and sizing).
+        samples: Ordered sample list (used for axis ticks and sizing).
+        output_dir: Directory to save output files.
+        filename_base: Base filename (without extension) for saved files.
+    """
     # Layout configuration
-    # =========================================================================
     MIN_FIG_HEIGHT = 600
     MIN_FIG_WIDTH = 1000
     PX_PER_GENE = 35
@@ -403,6 +458,92 @@ def create_oncoplot(
         logger.info(f"Saved oncoplot PNG: {png_path}")
     except Exception as e:
         logger.warning(f"Could not save static images (install kaleido): {e}")
+
+
+def create_oncoplot(
+    mutations_df: pd.DataFrame,
+    output_dir: str,
+    filename_base: str = 'master_oncoplot',
+    min_vaf: float = 0.001,
+    max_pvalue: float = 0.05,
+    top_n_genes: int = 30,
+    vaf_column: str = 'allele.frequency'
+) -> None:
+    """
+    Generate oncoplot showing mutation landscape.
+
+    Layout matches R ComplexHeatmap style:
+    - Top bar: Mutations per sample
+    - Main: Gene x Sample heatmap (sorted by mutation frequency, most at top)
+    - Right bar: Number of samples mutated per gene
+
+    This function is a thin orchestrator that delegates to:
+    - :func:`_prepare_oncoplot_data` — filtering and gene-sample matrix
+    - :func:`_build_clinical_annotations` — clinical annotation bar (placeholder)
+    - :func:`_render_oncoplot_heatmap` — main heatmap trace
+    - :func:`_render_frequency_bars` — top and side bar charts
+    - :func:`_assemble_oncoplot_figure` — layout, legend, and file export
+
+    Args:
+        mutations_df: DataFrame with consolidated mutations
+        output_dir: Directory to save plots
+        filename_base: Base filename for outputs
+        min_vaf: Minimum VAF filter
+        max_pvalue: Maximum P-value filter
+        top_n_genes: Number of top mutated genes to show
+        vaf_column: Column to use for VAF filtering
+    """
+    try:
+        from plotly.subplots import make_subplots
+    except ImportError:
+        logger.error("Plotly not installed. Run: pip install plotly kaleido")
+        return
+
+    # NOTE: Filtering is handled by the manager (master_output_manager.py line 318)
+    # via mutation_consolidator.filter_mutations() before data reaches this function.
+    # Do NOT duplicate filtering here — the manager's pre-filter is authoritative.
+
+    # 1. Data preparation
+    result = _prepare_oncoplot_data(mutations_df, top_n_genes, vaf_column)
+    if result is None:
+        return
+    df, genes, samples, matrix, hover_text, gene_sample_counts = result
+
+    # 2. Clinical annotations (placeholder — not yet implemented)
+    _build_clinical_annotations(None, samples)
+
+    # 3. Build subplot grid
+    # Oncoplot layout constants
+    TOP_BAR_HEIGHT = 0.12        # Fraction of figure height for top bar chart
+    MAIN_HEATMAP_HEIGHT = 0.88   # Fraction of figure height for main heatmap
+    HEATMAP_WIDTH = 0.85         # Fraction of figure width for heatmap
+    SIDE_BAR_WIDTH = 0.15        # Fraction of figure width for right bar chart
+    VERTICAL_GAP = 0.05          # Gap between top bar and heatmap
+    HORIZONTAL_GAP = 0.02        # Gap between heatmap and right bar
+
+    # Create 2x2 subplot grid:
+    # [top bar chart] [empty corner]
+    # [main heatmap]  [right bar chart]
+    fig = make_subplots(
+        rows=2, cols=2,
+        row_heights=[TOP_BAR_HEIGHT, MAIN_HEATMAP_HEIGHT],
+        column_widths=[HEATMAP_WIDTH, SIDE_BAR_WIDTH],
+        vertical_spacing=VERTICAL_GAP,
+        horizontal_spacing=HORIZONTAL_GAP,
+        specs=[
+            [{"type": "bar"}, {"type": "scatter"}],  # Top row
+            [{"type": "heatmap"}, {"type": "bar"}]   # Bottom row
+        ]
+    )
+
+    # 4. Render heatmap
+    _render_oncoplot_heatmap(fig, matrix, hover_text, genes, samples)
+
+    # 5. Render frequency bars
+    _render_frequency_bars(fig, df, genes, samples, gene_sample_counts)
+
+    # 6. Assemble final figure, add legend, and save
+    _assemble_oncoplot_figure(fig, genes, samples, output_dir, filename_base)
 
 
 def create_vaf_vs_age_plots(
