@@ -301,9 +301,10 @@ if __name__ == '__main__':
         'sample_ID': ['D98A,D98B', 'D99A,D99B', 'D100A']
     })
 
+    smmip_root = os.environ.get("SMMIP_ROOT", ".")
     test_batches = {
-        'KG001_01.22.25': '/Volumes/Seq_SSD/smMIP/KG001_01.22.25',
-        '10_23_25': '/Volumes/Seq_SSD/smMIP/10_23_25'
+        'KG001_01.22.25': os.path.join(smmip_root, 'KG001_01.22.25'),
+        '10_23_25': os.path.join(smmip_root, '10_23_25'),
     }
 
     # Check which batches exist
@@ -312,7 +313,7 @@ if __name__ == '__main__':
     if existing_batches:
         print(f"Testing with batches: {list(existing_batches.keys())}")
 
-        output = '/Volumes/Seq_SSD/smMIP/Master_Output/test_sample_index.xlsx'
+        output = os.path.join(smmip_root, 'Master_Output', 'test_sample_index.xlsx')
         df = build_sample_index(existing_batches, test_mutations, output)
 
         print(f"\nSample index ({len(df)} rows):")

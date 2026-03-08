@@ -89,7 +89,7 @@ def read_mutations_file(
         # Add batch_id as first column
         df.insert(0, 'batch_id', batch_id)
 
-        # Convert numeric columns
+        # Convert numeric columns (log non-numeric values before coercion)
         numeric_cols = ['pos', 'maf', 'cadd_scaled', 'P-value', 'P-value.Bonferroni',
                         'non.ref.counts', 'total.depth', 'allele.frequency',
                         'SSCS.non.ref.counts', 'SSCS.total.depth',
@@ -97,6 +97,14 @@ def read_mutations_file(
 
         for col in numeric_cols:
             if col in df.columns:
+                non_numeric_mask = pd.to_numeric(df[col], errors='coerce').isna() & df[col].notna()
+                non_numeric_count = non_numeric_mask.sum()
+                if non_numeric_count > 0:
+                    sample_values = df.loc[non_numeric_mask, col].head(5).tolist()
+                    logger.warning(
+                        f"{batch_id}: {non_numeric_count} non-numeric values in '{col}' "
+                        f"will be coerced to NaN (samples: {sample_values})"
+                    )
                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
         logger.info(f"Read {len(df)} mutations from {batch_id}")
@@ -299,9 +307,10 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
     # Test with sample batches
+    smmip_root = os.environ.get("SMMIP_ROOT", ".")
     test_batches = {
-        'KG001_01.22.25': '/Volumes/Seq_SSD/smMIP/KG001_01.22.25',
-        '10_23_25': '/Volumes/Seq_SSD/smMIP/10_23_25'
+        'KG001_01.22.25': os.path.join(smmip_root, 'KG001_01.22.25'),
+        '10_23_25': os.path.join(smmip_root, '10_23_25'),
     }
 
     # Check which batches exist
@@ -310,7 +319,7 @@ if __name__ == '__main__':
     if existing_batches:
         print(f"Testing with batches: {list(existing_batches.keys())}")
 
-        output = '/Volumes/Seq_SSD/smMIP/Master_Output/test_mutations.txt'
+        output = os.path.join(smmip_root, 'Master_Output', 'test_mutations.txt')
         df, processed = consolidate_mutations(existing_batches, output)
 
         print(f"\nProcessed batches: {processed}")

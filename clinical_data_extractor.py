@@ -15,8 +15,24 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Clinical data columns in order sheet (Q-Y, 0-indexed = 16-24)
-CLINICAL_COLUMNS = {
+# Clinical data column names as they appear in order sheet headers.
+# Mapping: standardized internal name → expected header name in the Excel file.
+# Falls back to positional extraction (Q-Y, 0-indexed 16-24) if name-based
+# lookup fails, for backwards compatibility with header-less sheets.
+CLINICAL_COLUMN_NAMES = {
+    'D#': 'D#',
+    'UCI_ID': 'UCI_ID',
+    'Date': 'Date',
+    'Age': 'Age',
+    'Sex': 'Sex',
+    'MPN': 'MPN',
+    'Driver_Mutant': 'Driver_Mutant',
+    'Medication': 'Medication',
+    'IFNa': 'IFNa',
+}
+
+# Positional fallback indices (0-indexed column positions Q-Y)
+CLINICAL_COLUMNS_POSITIONAL = {
     'D#': 16,           # Column Q - Patient ID
     'UCI_ID': 17,       # Column R - UCI identifier
     'Date': 18,         # Column S - Collection date
@@ -51,6 +67,9 @@ def evaluate_age_formula(value) -> Optional[int]:
     value_str = str(value).strip()
 
     # Handle Excel formula format: =YEAR-YEAR
+    # LIMITATION: Year subtraction (e.g., =2019-1942) gives an approximate age
+    # that can be off by +/-1 year since it ignores month/day of birth and
+    # collection date. This matches how the order sheets encode age.
     if value_str.startswith('='):
         formula = value_str[1:]
         # Match pattern like "2019-1942"
@@ -89,8 +108,9 @@ def normalize_sample_id(sample_id: str) -> str:
     # Take first part if comma-separated
     base_id = sample_id.split(',')[0].strip()
 
-    # Remove trailing A or B suffix
-    normalized = re.sub(r'[AB]$', '', base_id)
+    # Remove trailing A or B suffix only from D-number IDs (e.g., D79A → D79)
+    # to avoid stripping meaningful trailing letters from non-D-number identifiers
+    normalized = re.sub(r'^(D\d+)[AB]$', r'\1', base_id)
 
     return normalized
 
@@ -116,18 +136,33 @@ def extract_clinical_from_order_sheet(
         else:
             df = pd.read_excel(order_sheet_path, header=0)
 
-        # Check if we have enough columns
-        if len(df.columns) < 25:
-            logger.warning(f"Order sheet has only {len(df.columns)} columns, expected at least 25")
-            return pd.DataFrame()
+        # Try name-based extraction first (preferred — resilient to column reordering)
+        header_names = set(df.columns.astype(str))
+        expected_names = set(CLINICAL_COLUMN_NAMES.values())
+        matched_names = header_names & expected_names
 
-        # Extract clinical columns by position
-        clinical_data = {}
-        for col_name, col_idx in CLINICAL_COLUMNS.items():
-            if col_idx < len(df.columns):
-                clinical_data[col_name] = df.iloc[:, col_idx]
-            else:
-                clinical_data[col_name] = None
+        if len(matched_names) >= 3:
+            # Enough named columns found — use name-based extraction
+            logger.debug(f"Using name-based column extraction ({len(matched_names)} columns matched)")
+            clinical_data = {}
+            for std_name, header_name in CLINICAL_COLUMN_NAMES.items():
+                if header_name in df.columns:
+                    clinical_data[std_name] = df[header_name]
+                else:
+                    clinical_data[std_name] = None
+        else:
+            # Fall back to positional extraction for header-less or non-standard sheets
+            logger.debug("Falling back to positional column extraction")
+            if len(df.columns) < 25:
+                logger.warning(f"Order sheet has only {len(df.columns)} columns, expected at least 25")
+                return pd.DataFrame()
+
+            clinical_data = {}
+            for col_name, col_idx in CLINICAL_COLUMNS_POSITIONAL.items():
+                if col_idx < len(df.columns):
+                    clinical_data[col_name] = df.iloc[:, col_idx]
+                else:
+                    clinical_data[col_name] = None
 
         result_df = pd.DataFrame(clinical_data)
 
@@ -394,7 +429,8 @@ if __name__ == '__main__':
 
     logging.basicConfig(level=logging.INFO)
 
-    test_path = "/Volumes/Seq_SSD/smMIP/KG001_01.22.25/smMIP Order Sheet_KG001.xlsx"
+    smmip_root = os.environ.get("SMMIP_ROOT", ".")
+    test_path = os.path.join(smmip_root, "KG001_01.22.25", "smMIP Order Sheet_KG001.xlsx")
 
     if os.path.exists(test_path):
         print(f"Testing clinical extraction from: {test_path}")
@@ -409,4 +445,5 @@ if __name__ == '__main__':
             print(f"  {sid} → {normalize_sample_id(sid)}")
     else:
         print(f"Test file not found: {test_path}")
+        print("Set SMMIP_ROOT to the smMIP data directory.")
         sys.exit(1)

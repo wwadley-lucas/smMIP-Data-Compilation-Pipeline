@@ -19,10 +19,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from scipy import stats
 from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
 import logging
 import warnings
 
-warnings.filterwarnings('ignore')
+from clinical_data_extractor import normalize_sample_id
+
+# CLR-001: Filter only specific warning categories instead of blanket suppression
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -95,14 +100,6 @@ def normalize_variant_type(variant_type: str) -> str:
         return 'Non_Coding'
     else:
         return 'Other'
-
-
-def normalize_sample_id(sample_id: str) -> str:
-    """Normalize sample ID (remove A/B suffix)."""
-    if pd.isna(sample_id):
-        return ""
-    base_id = str(sample_id).split(',')[0].strip()
-    return re.sub(r'[AB]$', '', base_id)
 
 
 def create_oncoplot(
@@ -438,16 +435,32 @@ def create_vaf_vs_age_plots(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # MTH-008: First pass — collect regression p-values for FDR correction
+    gene_stats = {}
     for gene in genes:
         gene_df = df[df['gene'] == gene]
-
-        if len(gene_df) < 3:
+        if len(gene_df) < 3 or gene_df['Age'].nunique() < 2:
             continue
+        slope, intercept, r_value, p_value, std_err = stats.linregress(
+            gene_df['Age'], gene_df['VAF']
+        )
+        gene_stats[gene] = {
+            'slope': slope, 'intercept': intercept,
+            'r_value': r_value, 'p_value': p_value, 'std_err': std_err,
+            'n': len(gene_df),
+        }
 
-        # Skip if all ages are identical (can't do regression)
-        if gene_df['Age'].nunique() < 2:
-            logger.debug(f"Skipping {gene}: all ages identical")
-            continue
+    # Apply BH FDR correction across all tested genes
+    if gene_stats:
+        tested_genes = list(gene_stats.keys())
+        raw_pvalues = [gene_stats[g]['p_value'] for g in tested_genes]
+        _, fdr_pvalues, _, _ = multipletests(raw_pvalues, method='fdr_bh')
+        for gene, q_val in zip(tested_genes, fdr_pvalues):
+            gene_stats[gene]['q_value'] = q_val
+
+    # Second pass — generate plots with FDR-corrected q-values
+    for gene, gs in gene_stats.items():
+        gene_df = df[df['gene'] == gene]
 
         # Create scatter plot with regression
         fig = px.scatter(
@@ -462,16 +475,12 @@ def create_vaf_vs_age_plots(
 
         fig.update_traces(marker=dict(size=10, color='#3498db'))
 
-        # Calculate regression stats
-        slope, intercept, r_value, p_value, std_err = stats.linregress(
-            gene_df['Age'], gene_df['VAF']
-        )
-
-        # Add stats annotation
+        # Add stats annotation (includes FDR q-value)
         fig.add_annotation(
             x=0.05, y=0.95,
             xref='paper', yref='paper',
-            text=f'R² = {r_value**2:.3f}<br>p = {p_value:.3e}<br>n = {len(gene_df)}',
+            text=(f'R² = {gs["r_value"]**2:.3f}<br>p = {gs["p_value"]:.3e}'
+                  f'<br>q(FDR) = {gs["q_value"]:.3e}<br>n = {gs["n"]}'),
             showarrow=False,
             align='left',
             bgcolor='white',
@@ -496,7 +505,7 @@ def create_vaf_vs_age_plots(
         except Exception as e:
             logger.warning(f"Could not save static images for {gene}: {e}")
 
-    logger.info(f"Created VAF vs Age plots for {len(genes)} genes")
+    logger.info(f"Created VAF vs Age plots for {len(gene_stats)} genes")
 
 
 def compute_fisher_cooccurrence(
@@ -526,10 +535,10 @@ def compute_fisher_cooccurrence(
         logger.warning("Need at least 2 genes for co-occurrence analysis")
         return pd.DataFrame()
 
-    gene_sample_matrix = pd.DataFrame(0, index=samples, columns=genes)
-
-    for _, row in df.iterrows():
-        gene_sample_matrix.loc[row['sample_normalized'], row['gene']] = 1
+    # BUG-009: Use crosstab instead of iterrows for O(n) vectorized construction
+    gene_sample_matrix = pd.crosstab(
+        df['sample_normalized'], df['gene']
+    ).reindex(index=samples, columns=genes, fill_value=0).clip(upper=1)
 
     # Pairwise Fisher's exact test
     results = []
@@ -652,8 +661,8 @@ def create_gene_pair_plots(
             hovertemplate='Sample: %{text}<br>' + gene1 + ' VAF: %{x:.3f}<br>' + gene2 + ' VAF: %{y:.3f}'
         ))
 
-        # Calculate correlation
-        r, p = stats.pearsonr(merged['VAF1'], merged['VAF2'])
+        # Calculate correlation (Spearman: VAF is bounded [0,1], not necessarily normal)
+        r, p = stats.spearmanr(merged['VAF1'], merged['VAF2'])
 
         fig.update_layout(
             title=f'{gene1} vs {gene2} VAF Correlation',
@@ -668,7 +677,7 @@ def create_gene_pair_plots(
         fig.add_annotation(
             x=0.05, y=0.95,
             xref='paper', yref='paper',
-            text=f'r = {r:.3f}<br>p = {p:.3e}<br>n = {len(merged)}<br>Fisher p = {pair_row["p_value"]:.3e}',
+            text=f'rho = {r:.3f}<br>p = {p:.3e}<br>n = {len(merged)}<br>Fisher p = {pair_row["p_value"]:.3e}',
             showarrow=False,
             align='left',
             bgcolor='white',
@@ -719,14 +728,12 @@ def create_pca_plot(
     samples = df['sample_normalized'].unique()
     genes = df['gene'].unique()
 
-    vaf_matrix = pd.DataFrame(0.0, index=samples, columns=genes)
-
-    for _, row in df.iterrows():
-        sample = row['sample_normalized']
-        gene = row['gene']
-        vaf = float(row[vaf_col]) if pd.notna(row[vaf_col]) else 0
-        # Take max VAF if multiple mutations in same gene
-        vaf_matrix.loc[sample, gene] = max(vaf_matrix.loc[sample, gene], vaf)
+    # BUG-009: Use pivot_table instead of iterrows for vectorized construction
+    df[vaf_col] = pd.to_numeric(df[vaf_col], errors='coerce').fillna(0)
+    vaf_matrix = df.pivot_table(
+        index='sample_normalized', columns='gene', values=vaf_col,
+        aggfunc='max', fill_value=0.0
+    ).reindex(index=samples, columns=genes, fill_value=0.0)
 
     # Extract MPN type for coloring (not used in PCA, just for visualization)
     mpn_types = pd.Series(index=samples, dtype=str)
@@ -759,11 +766,24 @@ def create_pca_plot(
         logger.warning("Not enough samples for PCA")
         return
 
+    # BUG-006: Bound n_components by both n_features and n_samples
+    n_samples = len(feature_matrix)
+    n_features = len(feature_matrix.columns)
+    n_components = min(2, n_features, n_samples)
+
+    if n_components < 2:
+        logger.warning(
+            f"Cannot run PCA: need at least 2 components but only "
+            f"{n_components} possible (n_samples={n_samples}, n_features={n_features})"
+        )
+        return
+
     # Standardize and run PCA
     scaler = StandardScaler()
     scaled = scaler.fit_transform(feature_matrix)
 
-    pca = PCA(n_components=min(3, len(feature_matrix.columns)))
+    # RPR-005: Fix random_state for reproducible PCA results
+    pca = PCA(n_components=n_components, random_state=42)
     pca_result = pca.fit_transform(scaled)
 
     pca_df = pd.DataFrame(
@@ -907,7 +927,8 @@ if __name__ == '__main__':
         'MPN': ['PMF', '', '', 'ET', 'PV', '']
     })
 
-    output_dir = '/Volumes/Seq_SSD/smMIP/Master_Output/output'
+    smmip_root = os.environ.get("SMMIP_ROOT", ".")
+    output_dir = os.path.join(smmip_root, 'Master_Output', 'output')
 
     try:
         generate_all_visualizations(test_mutations, test_clinical, output_dir)

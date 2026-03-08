@@ -478,15 +478,21 @@ Examples:
             }
         }
 
-    # Process CLI overrides into EXTERNAL_DATA_OVERRIDES
+    # SEC-001: Validate and process CLI overrides into EXTERNAL_DATA_OVERRIDES
     if args.metadata:
         for batch_id, path in args.metadata:
+            if not os.path.exists(path):
+                logger.error(f"--metadata path does not exist: {path}")
+                exit(1)
             if batch_id not in EXTERNAL_DATA_OVERRIDES:
                 EXTERNAL_DATA_OVERRIDES[batch_id] = {}
             EXTERNAL_DATA_OVERRIDES[batch_id]['metadata'] = path
 
     if args.mutations:
         for batch_id, path in args.mutations:
+            if not os.path.exists(path):
+                logger.error(f"--mutations path does not exist: {path}")
+                exit(1)
             if batch_id not in EXTERNAL_DATA_OVERRIDES:
                 EXTERNAL_DATA_OVERRIDES[batch_id] = {}
             EXTERNAL_DATA_OVERRIDES[batch_id]['mutations'] = path
