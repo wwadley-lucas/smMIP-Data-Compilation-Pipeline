@@ -34,16 +34,16 @@ from mutation_consolidator import consolidate_mutations, find_mutations_file, fi
 from sample_index_builder import build_sample_index, update_sample_index
 from visualization_generator import generate_all_visualizations
 
-# Configuration
-SMMIP_ROOT = '/Volumes/Seq_SSD/smMIP'
+# Configuration — set SMMIP_ROOT env var or pass --root on CLI
+SMMIP_ROOT = os.environ.get('SMMIP_ROOT', '/Volumes/Seq_SSD/smMIP')
 MASTER_OUTPUT_DIR = os.path.join(SMMIP_ROOT, 'Master_Output')
 
 # External data overrides for specific batches
 # Maps batch_id to dict with 'mutations' and/or 'metadata' paths
 EXTERNAL_DATA_OVERRIDES = {
     '10_23_25': {
-        'mutations': '/Users/lucaswadley/Desktop/FINAL_OUT/called_mutations.txt',
-        'metadata': '/Users/lucaswadley/Desktop/FINAL_OUT/MetaData.txt'
+        'mutations': os.path.join(SMMIP_ROOT, 'FINAL_OUT', 'called_mutations.txt'),
+        'metadata': os.path.join(SMMIP_ROOT, 'FINAL_OUT', 'MetaData.txt')
     }
 }
 
@@ -410,6 +410,12 @@ Examples:
     )
 
     parser.add_argument(
+        '--root',
+        default=None,
+        help='Root directory for smMIP data (overrides SMMIP_ROOT env var)'
+    )
+
+    parser.add_argument(
         '--status', '-s',
         action='store_true',
         help='Show current status without updating'
@@ -456,6 +462,19 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    # Apply --root override
+    global SMMIP_ROOT, MASTER_OUTPUT_DIR, EXTERNAL_DATA_OVERRIDES
+    if args.root:
+        SMMIP_ROOT = args.root
+        MASTER_OUTPUT_DIR = os.path.join(SMMIP_ROOT, 'Master_Output')
+        # Recompute overrides that depend on SMMIP_ROOT
+        EXTERNAL_DATA_OVERRIDES = {
+            '10_23_25': {
+                'mutations': os.path.join(SMMIP_ROOT, 'FINAL_OUT', 'called_mutations.txt'),
+                'metadata': os.path.join(SMMIP_ROOT, 'FINAL_OUT', 'MetaData.txt')
+            }
+        }
 
     # Process CLI overrides into EXTERNAL_DATA_OVERRIDES
     if args.metadata:

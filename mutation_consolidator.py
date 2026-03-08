@@ -172,6 +172,13 @@ def consolidate_mutations(
         else:
             combined = new_data
 
+        # Deduplicate (guards against crash-and-retry leaving duplicates)
+        dedup_cols = ['batch_id', 'sample_ID', 'gene', 'pos', 'alt']
+        before = len(combined)
+        combined = combined.drop_duplicates(subset=dedup_cols, keep='last')
+        if len(combined) < before:
+            logger.warning(f"Removed {before - len(combined)} duplicate rows during consolidation")
+
         # Save consolidated file
         combined.to_csv(output_path, sep='\t', index=False)
         logger.info(f"Saved {len(combined)} total mutations to {output_path}")
